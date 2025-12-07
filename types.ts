@@ -33,9 +33,3 @@ export interface NetworkMessage {
   payload?: any;
 }
 
-// PeerJS types when loaded via CDN
-declare global {
-  interface Window {
-    Peer: any;
-  }
-}

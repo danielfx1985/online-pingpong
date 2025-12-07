@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { io, Socket } from 'socket.io-client';
 import Lobby from './components/Lobby';
 import Game from './components/Game';
 import { GameStatus, GameState, NetworkMessage } from './types';
@@ -8,42 +9,40 @@ import { CANVAS_HEIGHT, PADDLE_HEIGHT } from './constants';
 const App: React.FC = () => {
   const [status, setStatus] = useState<GameStatus>(GameStatus.MENU);
   const [gameState, setGameState] = useState<GameState>(initialGameState());
-  const [peerId, setPeerId] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   
   // Refs for logic that doesn't need to trigger re-renders
-  const peerRef = useRef<any>(null);
-  const connRef = useRef<any>(null);
+  const socketRef = useRef<Socket | null>(null);
   const isHostRef = useRef<boolean>(false);
   const gameStateRef = useRef<GameState>(initialGameState());
   const requestRef = useRef<number>(0);
 
   // --- Network Setup ---
 
-  const initializePeer = useCallback(() => {
-    // Access the global Peer object loaded via CDN
-    const Peer = window.Peer;
-    if (!Peer) {
-      setConnectionError("PeerJS library not loaded");
-      return null;
+  const connectSocket = useCallback((ip?: string) => {
+    // If we already have a socket, disconnect it to be safe
+    if (socketRef.current) {
+        socketRef.current.disconnect();
     }
 
-    const peer = new Peer(undefined, {
-      debug: 1,
+    const url = ip ? `http://${ip}:3000` : undefined; // undefined defaults to window.location
+    const socket = io(url, {
+        reconnection: false, // Don't auto reconnect for this game logic
+        transports: ['websocket']
     });
 
-    peer.on('open', (id: string) => {
-      setPeerId(id);
-      setConnectionError(null);
+    socketRef.current = socket;
+
+    socket.on('connect_error', (err) => {
+        console.error('Socket error:', err);
+        setConnectionError(`Connection failed: ${err.message}`);
     });
 
-    peer.on('error', (err: any) => {
-      console.error('Peer error:', err);
-      setConnectionError('Connection error. Please restart.');
+    socket.on('disconnect', () => {
+        // Handle disconnect if needed
     });
 
-    peerRef.current = peer;
-    return peer;
+    return socket;
   }, []);
 
   const handleData = useCallback((data: NetworkMessage) => {
@@ -72,56 +71,61 @@ const App: React.FC = () => {
   useEffect(() => {
     if (status === GameStatus.LOBBY_HOST) {
       isHostRef.current = true;
-      const peer = initializePeer();
+      const socket = connectSocket();
       
-      if (peer) {
-        peer.on('connection', (conn: any) => {
-          connRef.current = conn;
-          // Connection established
-          conn.on('open', () => {
-             setStatus(GameStatus.PLAYING);
-             // Setup listener
-             conn.on('data', handleData);
-             
-             // Initial Sync
-             conn.send({ type: 'SYNC', payload: gameStateRef.current });
-          });
-          
-          conn.on('close', () => {
-            alert('Opponent disconnected');
-            resetGame();
-          });
-        });
-      }
+      socket.on('connect', () => {
+          socket.emit('register_host');
+      });
+
+      socket.on('player_connected', () => {
+          setStatus(GameStatus.PLAYING);
+          // Initial Sync
+          socket.emit('SYNC', { type: 'SYNC', payload: gameStateRef.current });
+      });
+
+      socket.on('INPUT', (msg: NetworkMessage) => {
+          handleData(msg);
+      });
+
+      socket.on('client_disconnected', () => {
+          alert('Player 2 disconnected');
+          resetGame();
+      });
+
+      // Cleanup
+      return () => {
+          socket.off('player_connected');
+          socket.off('INPUT');
+          socket.off('client_disconnected');
+      };
     }
-  }, [status, initializePeer, handleData]);
+  }, [status, connectSocket, handleData]);
 
   // --- Client Logic ---
-  const joinGame = (hostId: string) => {
+  const joinGame = (hostIp: string) => {
     isHostRef.current = false;
-    const peer = initializePeer();
+    const socket = connectSocket(hostIp);
 
-    if (peer) {
-      // Small delay to ensure peer is open before connecting
-      setTimeout(() => {
-        const conn = peer.connect(hostId);
-        connRef.current = conn;
+    socket.on('connect', () => {
+        socket.emit('register_client');
+    });
 
-        conn.on('open', () => {
-          setStatus(GameStatus.PLAYING);
-          conn.on('data', handleData);
-        });
+    socket.on('connected_to_host', () => {
+        setStatus(GameStatus.PLAYING);
+    });
 
-        conn.on('error', (err: any) => {
-           setConnectionError("Could not connect to host.");
-        });
+    socket.on('SYNC', (msg: NetworkMessage) => {
+        handleData(msg);
+    });
 
-        conn.on('close', () => {
-            alert('Host disconnected');
-            resetGame();
-        });
-      }, 500);
-    }
+    socket.on('error_message', (msg: string) => {
+        setConnectionError(msg);
+    });
+
+    socket.on('host_disconnected', () => {
+        alert('Host disconnected');
+        resetGame();
+    });
   };
 
   // --- Game Loop (Host Only) ---
@@ -133,8 +137,8 @@ const App: React.FC = () => {
       setGameState(nextState); // Trigger React Render
 
       // Send to Client
-      if (connRef.current && connRef.current.open) {
-        connRef.current.send({ type: 'SYNC', payload: nextState });
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('SYNC', { type: 'SYNC', payload: nextState });
       }
     }
     requestRef.current = requestAnimationFrame(gameLoop);
@@ -155,13 +159,9 @@ const App: React.FC = () => {
       gameStateRef.current.player1.y = y;
     } else {
       // Client sends input to host
-      if (connRef.current && connRef.current.open) {
-        connRef.current.send({ type: 'INPUT', payload: y });
-        // Optimistic local update for smoothness could go here, 
-        // but for simplicity we rely on host sync or separate local render state.
-        // For this demo, we'll just update the ref locally for immediate feedback if we wanted, 
-        // but `Game` component uses `gameState` prop which comes from Host.
-        // To fix latency jitter, we should update local prediction:
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('INPUT', { type: 'INPUT', payload: y });
+        // Optimistic local update
         setGameState(prev => ({
            ...prev,
            player2: { ...prev.player2, y }
@@ -173,7 +173,6 @@ const App: React.FC = () => {
   const handleRestart = () => {
     if (isHostRef.current) {
        const newState = initialGameState();
-       // If game over, reset scores too
        if (gameStateRef.current.winner) {
           newState.player1.score = 0;
           newState.player2.score = 0;
@@ -182,16 +181,17 @@ const App: React.FC = () => {
        gameStateRef.current = newState;
        setGameState(newState);
        
-       if (connRef.current) {
-         connRef.current.send({ type: 'SYNC', payload: newState });
+       if (socketRef.current) {
+         socketRef.current.emit('SYNC', { type: 'SYNC', payload: newState });
        }
     }
   };
 
   const resetGame = () => {
-    if (peerRef.current) peerRef.current.destroy();
-    if (connRef.current) connRef.current.close();
-    setPeerId(null);
+    if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+    }
     setStatus(GameStatus.MENU);
     setGameState(initialGameState());
     gameStateRef.current = initialGameState();
@@ -222,7 +222,8 @@ const App: React.FC = () => {
           <div className="z-10">
              <Lobby 
                status={status}
-               peerId={peerId}
+               // PeerId is not used in IP mode
+               peerId={null} 
                onJoin={joinGame}
                onCancel={resetGame}
                setStatus={setStatus}

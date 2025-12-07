@@ -1,32 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { GameStatus } from '../types';
 
 interface LobbyProps {
   status: GameStatus;
-  peerId: string | null;
-  onJoin: (hostId: string) => void;
+  peerId: string | null; // Kept for interface compatibility but not used
+  onJoin: (hostIp: string) => void;
   onCancel: () => void;
   setStatus: (status: GameStatus) => void;
   error: string | null;
 }
 
-const Lobby: React.FC<LobbyProps> = ({ status, peerId, onJoin, onCancel, setStatus, error }) => {
-  const [targetId, setTargetId] = useState('');
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (copied) {
-      const timer = setTimeout(() => setCopied(false), 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [copied]);
-
-  const copyToClipboard = () => {
-    if (peerId) {
-      navigator.clipboard.writeText(peerId);
-      setCopied(true);
-    }
-  };
+const Lobby: React.FC<LobbyProps> = ({ status, onJoin, onCancel, setStatus, error }) => {
+  const [targetIp, setTargetIp] = useState(window.location.hostname);
 
   if (status === GameStatus.MENU) {
     return (
@@ -66,23 +51,12 @@ const Lobby: React.FC<LobbyProps> = ({ status, peerId, onJoin, onCancel, setStat
         <h2 className="text-2xl font-bold text-cyan-400 mb-6 text-center">Hosting Game</h2>
         
         <div className="space-y-4 mb-8">
-          <p className="text-gray-300 text-sm text-center">Share this ID with your friend:</p>
-          <div className="flex items-center gap-2 bg-gray-900/80 p-4 rounded-lg border border-gray-700">
-            <code className="flex-1 text-center font-mono text-lg text-cyan-300 break-all">
-              {peerId || 'Generating ID...'}
-            </code>
-            <button 
-              onClick={copyToClipboard}
-              className="p-2 hover:bg-gray-700 rounded-md transition-colors text-gray-400 hover:text-white"
-              title="Copy to clipboard"
-            >
-              {copied ? (
-                <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
-              )}
-            </button>
-          </div>
+          <p className="text-gray-300 text-sm text-center">
+            Tell your friend to connect to your IP address.
+            <br/>
+            (If on same WiFi, usually 192.168.x.x)
+          </p>
+          
           <div className="flex justify-center">
             <div className="flex items-center gap-3 text-yellow-400 bg-yellow-400/10 px-4 py-2 rounded-full text-sm animate-pulse">
               <span className="w-2 h-2 rounded-full bg-yellow-400"></span>
@@ -108,14 +82,17 @@ const Lobby: React.FC<LobbyProps> = ({ status, peerId, onJoin, onCancel, setStat
         
         <div className="space-y-4 mb-8">
           <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Enter Host ID</label>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Host IP Address</label>
             <input
               type="text"
-              value={targetId}
-              onChange={(e) => setTargetId(e.target.value)}
-              placeholder="e.g. 1234-abcd-..."
+              value={targetIp}
+              onChange={(e) => setTargetIp(e.target.value)}
+              placeholder="e.g. 192.168.1.5"
               className="w-full bg-gray-900 border border-gray-700 focus:border-pink-500 rounded-lg p-4 text-white placeholder-gray-600 outline-none transition-colors font-mono"
             />
+            <p className="text-xs text-gray-500 mt-2">
+              Default: {window.location.hostname} (if you are visiting the host's page)
+            </p>
           </div>
           
           {error && (
@@ -128,8 +105,8 @@ const Lobby: React.FC<LobbyProps> = ({ status, peerId, onJoin, onCancel, setStat
 
         <div className="space-y-3">
           <button
-            onClick={() => onJoin(targetId)}
-            disabled={!targetId}
+            onClick={() => onJoin(targetIp)}
+            disabled={!targetIp}
             className="w-full py-3 bg-pink-600 hover:bg-pink-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-bold tracking-wide shadow-lg shadow-pink-900/30"
           >
             CONNECT
