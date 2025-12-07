@@ -1,0 +1,5 @@
+{
+  "name": "Neon Pong LAN",
+  "description": "A real-time multiplayer table tennis game using P2P WebRTC. Host a game and share your ID to play with a friend on the same network or anywhere.",
+  "requestFramePermissions": []
+}
