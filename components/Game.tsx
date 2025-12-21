@@ -14,10 +14,13 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Handle Input
   useEffect(() => {
     const handleMove = (e: MouseEvent | TouchEvent) => {
       if (!canvasRef.current) return;
+      
+      // Prevent scrolling or browser gestures
+      if (e.cancelable) e.preventDefault();
+
       const rect = canvasRef.current.getBoundingClientRect();
       const scaleY = CANVAS_HEIGHT / rect.height;
       
@@ -31,7 +34,6 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
       }
 
       const relativeY = (clientY - rect.top) * scaleY;
-      // Clamp paddle position
       const clampedY = Math.max(0, Math.min(CANVAS_HEIGHT - PADDLE_HEIGHT, relativeY - PADDLE_HEIGHT / 2));
       
       onMouseMove(clampedY);
@@ -39,18 +41,20 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
 
     const canvas = canvasRef.current;
     if (canvas) {
+      // Use passive: false to allow preventDefault
       canvas.addEventListener('mousemove', handleMove);
       canvas.addEventListener('touchmove', handleMove, { passive: false });
+      canvas.addEventListener('touchstart', handleMove, { passive: false });
     }
     return () => {
       if (canvas) {
         canvas.removeEventListener('mousemove', handleMove);
         canvas.removeEventListener('touchmove', handleMove);
+        canvas.removeEventListener('touchstart', handleMove);
       }
     };
   }, [onMouseMove]);
 
-  // Render Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -59,34 +63,28 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
     let animationFrameId: number;
 
     const render = () => {
-      // Clear
       ctx.fillStyle = COLORS.BACKGROUND;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-      // Draw Center Line
       ctx.setLineDash([10, 15]);
       ctx.beginPath();
       ctx.moveTo(CANVAS_WIDTH / 2, 0);
       ctx.lineTo(CANVAS_WIDTH / 2, CANVAS_HEIGHT);
-      ctx.strokeStyle = '#374151'; // gray-700
+      ctx.strokeStyle = '#374151';
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Draw Paddles
-      // Player 1 (Left - Cyan)
       ctx.fillStyle = COLORS.P1;
       ctx.shadowColor = COLORS.P1;
       ctx.shadowBlur = 15;
       ctx.fillRect(0, gameState.player1.y, PADDLE_WIDTH, PADDLE_HEIGHT);
 
-      // Player 2 (Right - Pink)
       ctx.fillStyle = COLORS.P2;
       ctx.shadowColor = COLORS.P2;
       ctx.shadowBlur = 15;
       ctx.fillRect(CANVAS_WIDTH - PADDLE_WIDTH, gameState.player2.y, PADDLE_WIDTH, PADDLE_HEIGHT);
 
-      // Draw Ball
       ctx.beginPath();
       ctx.arc(gameState.ball.x, gameState.ball.y, BALL_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = COLORS.BALL;
@@ -95,10 +93,8 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
       ctx.fill();
       ctx.closePath();
       
-      // Reset Shadow for text/UI to keep clean
       ctx.shadowBlur = 0;
 
-      // Draw Names
       ctx.font = 'bold 20px sans-serif';
       ctx.fillStyle = isHost ? COLORS.P1 : '#4b5563';
       ctx.fillText(gameState.player1.name, 40, 30);
@@ -112,31 +108,27 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
     };
 
     render();
-
     return () => cancelAnimationFrame(animationFrameId);
   }, [gameState, isHost]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen w-full p-4 bg-gray-950">
-      
-      {/* Score Board */}
       <div className="flex items-center gap-12 mb-6 select-none">
         <div className="flex flex-col items-center">
           <span className="text-sm text-cyan-500 font-bold tracking-widest uppercase mb-1">Host</span>
-          <span className="text-6xl font-black text-white font-mono bg-clip-text text-transparent bg-gradient-to-b from-cyan-300 to-cyan-700 stroke-2 border-cyan-500 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]">
+          <span className="text-6xl font-black text-white font-mono drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]">
             {gameState.player1.score}
           </span>
         </div>
         <div className="text-gray-700 text-2xl font-light">vs</div>
         <div className="flex flex-col items-center">
           <span className="text-sm text-pink-500 font-bold tracking-widest uppercase mb-1">Guest</span>
-          <span className="text-6xl font-black text-white font-mono bg-clip-text text-transparent bg-gradient-to-b from-pink-300 to-pink-700 drop-shadow-[0_0_15px_rgba(236,72,153,0.5)]">
+          <span className="text-6xl font-black text-white font-mono drop-shadow-[0_0_15px_rgba(236,72,153,0.5)]">
             {gameState.player2.score}
           </span>
         </div>
       </div>
 
-      {/* Game Canvas Container */}
       <div 
         ref={containerRef}
         className="relative group rounded-xl overflow-hidden shadow-2xl ring-4 ring-gray-800 bg-gray-900 aspect-[8/5] w-full max-w-[800px]"
@@ -148,7 +140,6 @@ const Game: React.FC<GameProps> = ({ gameState, isHost, onMouseMove, onRestart, 
           className="w-full h-full cursor-none touch-none"
         />
 
-        {/* Overlay for Game Over or Pause */}
         {(gameState.winner || gameState.isPaused) && (
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-fade-in">
              {gameState.winner ? (
