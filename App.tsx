@@ -17,31 +17,11 @@ const App: React.FC = () => {
   const gameStateRef = useRef<GameState>(initialGameState());
   const requestRef = useRef<number>(0);
 
-  const initializePeer = useCallback(() => {
-    const Peer = window.Peer;
-    if (!Peer) {
-      setConnectionError("PeerJS library not loaded");
-      return null;
-    }
-
-    const peer = new Peer(undefined, { debug: 1 });
-    peer.on('open', (id: string) => {
-      setPeerId(id);
-      setConnectionError(null);
-    });
-    peer.on('error', (err: any) => {
-      console.error('Peer error:', err);
-      setConnectionError('Connection error. Please restart.');
-    });
-
-    peerRef.current = peer;
-    return peer;
-  }, []);
-
+  // 1. Handle incoming data (MUST be defined before startHosting/joinGame)
   const handleData = useCallback((data: NetworkMessage) => {
     if (data.type === 'SYNC') {
       if (!isHostRef.current) {
-        // CLIENT AUTHORITY: Preserve local paddle position to avoid jitter from host lag
+        // CLIENT AUTHORITY: Preserve local paddle position
         const localY = gameStateRef.current.player2.y;
         const syncedState = { ...data.payload };
         syncedState.player2.y = localY; 
@@ -51,9 +31,9 @@ const App: React.FC = () => {
       }
     } else if (data.type === 'INPUT') {
       if (isHostRef.current) {
-        // Host updates guest position from network
+        // Host updates guest position
         gameStateRef.current.player2.y = data.payload;
-        // Also update local state so host sees guest move immediately
+        // Optimization: update state immediately for smooth rendering on host
         setGameState(prev => ({
           ...prev,
           player2: { ...prev.player2, y: data.payload }
@@ -62,48 +42,113 @@ const App: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => {
-    if (status === GameStatus.LOBBY_HOST) {
+  // 2. Initialize Peer for Host with a custom ID
+  const startHosting = useCallback((customId: string) => {
+    // Sanitize ID: PeerJS IDs must be alphanumeric, dashes, or underscores.
+    // Replace dots with dashes (192.168.1.1 -> 192-168-1-1)
+    const sanitizedId = customId.replace(/\./g, '-').replace(/[^a-zA-Z0-9-_]/g, '');
+
+    if (!sanitizedId) {
+      setConnectionError("Invalid address format.");
+      return;
+    }
+
+    const Peer = window.Peer;
+    if (!Peer) {
+      setConnectionError("PeerJS library not loaded");
+      return;
+    }
+
+    // Cleanup existing peer
+    if (peerRef.current) peerRef.current.destroy();
+    setConnectionError(null);
+
+    // Initialize Peer
+    const peer = new Peer(sanitizedId, { debug: 1 });
+
+    peer.on('open', (id: string) => {
+      console.log('Host Peer Opened:', id);
+      setPeerId(id);
+      setStatus(GameStatus.LOBBY_HOST); // Move to waiting screen
       isHostRef.current = true;
-      const peer = initializePeer();
-      
-      if (peer) {
-        peer.on('connection', (conn: any) => {
-          connRef.current = conn;
-          conn.on('open', () => {
-             setStatus(GameStatus.PLAYING);
-             conn.on('data', handleData);
-             conn.send({ type: 'SYNC', payload: gameStateRef.current });
-          });
-          conn.on('close', () => {
-            alert('Opponent disconnected');
-            resetGame();
-          });
-        });
+    });
+
+    peer.on('error', (err: any) => {
+      console.error('Peer error:', err);
+      if (err.type === 'unavailable-id') {
+        setConnectionError(`Address '${sanitizedId}' is already in use. Try another.`);
+      } else {
+        setConnectionError(`Connection Error: ${err.type}`);
       }
-    }
-  }, [status, initializePeer, handleData]);
+    });
 
-  const joinGame = (hostId: string) => {
+    peer.on('connection', (conn: any) => {
+      console.log('Host received connection');
+      connRef.current = conn;
+      conn.on('open', () => {
+         setStatus(GameStatus.PLAYING);
+         conn.on('data', handleData);
+         // Initial Sync
+         const startingState = initialGameState();
+         gameStateRef.current = startingState;
+         setGameState(startingState);
+         conn.send({ type: 'SYNC', payload: startingState });
+      });
+      conn.on('close', () => {
+        alert('Opponent disconnected');
+        resetGame();
+      });
+    });
+
+    peerRef.current = peer;
+  }, [handleData]);
+
+  // 3. Join Game function
+  const joinGame = useCallback((hostId: string) => {
+    // Sanitize input similarly
+    const sanitizedId = hostId.replace(/\./g, '-').replace(/[^a-zA-Z0-9-_]/g, '');
+    
+    if (!sanitizedId) {
+        setConnectionError("Invalid host address format.");
+        return;
+    }
+
     isHostRef.current = false;
-    const peer = initializePeer();
+    const Peer = window.Peer;
+    if (!Peer) return;
 
-    if (peer) {
-      setTimeout(() => {
-        const conn = peer.connect(hostId);
-        connRef.current = conn;
-        conn.on('open', () => {
-          setStatus(GameStatus.PLAYING);
-          conn.on('data', handleData);
-        });
-        conn.on('error', () => setConnectionError("Could not connect to host."));
-        conn.on('close', () => {
-            alert('Host disconnected');
-            resetGame();
-        });
-      }, 500);
-    }
-  };
+    if (peerRef.current) peerRef.current.destroy();
+    setConnectionError(null);
+
+    const peer = new Peer(undefined, { debug: 1 }); // Guest gets random ID
+    peerRef.current = peer;
+
+    peer.on('open', () => {
+      const conn = peer.connect(sanitizedId);
+      connRef.current = conn;
+
+      conn.on('open', () => {
+        setStatus(GameStatus.PLAYING);
+        conn.on('data', handleData);
+      });
+      
+      conn.on('error', (err: any) => {
+          console.error("Conn Error", err);
+          setConnectionError("Could not connect. Check address.");
+      });
+
+      conn.on('close', () => {
+          alert('Host disconnected');
+          resetGame();
+      });
+    });
+
+    peer.on('error', (err: any) => {
+        console.error('Peer error:', err);
+        setConnectionError('Connection failed: ' + err.type);
+    });
+
+  }, [handleData]);
 
   const gameLoop = useCallback(() => {
     if (isHostRef.current && status === GameStatus.PLAYING) {
@@ -166,6 +211,7 @@ const App: React.FC = () => {
     setGameState(initialGameState());
     gameStateRef.current = initialGameState();
     setConnectionError(null);
+    isHostRef.current = false;
   }, []);
 
   return (
@@ -189,9 +235,11 @@ const App: React.FC = () => {
                status={status}
                peerId={peerId}
                onJoin={joinGame}
+               onHost={startHosting}
                onCancel={resetGame}
                setStatus={setStatus}
                error={connectionError}
+               setConnectionError={setConnectionError}
              />
           </div>
         </div>
